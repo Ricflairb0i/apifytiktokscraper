@@ -124,19 +124,20 @@ async def main():
                         if "application/json" in content_type:
                             url = response.url
                             
-                            # Log all matching TikTok API endpoints
-                            if "/api/search/" in url:
+                                # Log all matching TikTok API endpoints
+                            endpoints = ["/api/search/", "/api/post/", "/api/item/", "/api/recommend/", "/api/discover/", "/api/challenge/", "/api/general/", "/api/related/", "/api/"]
+                            if any(endpoint in url for endpoint in endpoints):
                                 api_intercept_count += 1
-                                Actor.log.info(f"[NETWORK] Intercepted search API response: {url}")
-                            elif any(endpoint in url for endpoint in ["/api/post/", "/api/item/", "/api/recommend/", "/api/comment/"]):
-                                api_intercept_count += 1
-                                Actor.log.info(f"[NETWORK] Intercepted other relevant API response: {url.split('?')[0]}")
+                                Actor.log.info(f"[NETWORK] Intercepted relevant API response: {url}")
+                            
+                            if query and (urllib.parse.quote(query).lower() in url.lower() or query.replace(' ', '%20').lower() in url.lower()):
+                                Actor.log.info(f"[NETWORK] Request contains query: {url}")
                             
                             try:
                                 text = await response.text()
                                 data = json.loads(text)
                                 
-                                if "/api/search/" in url and isinstance(data, dict):
+                                if any(ep in url for ep in endpoints) and isinstance(data, dict):
                                     Actor.log.info(f"[NETWORK SEARCH] Full URL: {url}")
                                     top_keys = list(data.keys())
                                     Actor.log.info(f"[NETWORK SEARCH] Top-level keys: {top_keys}")
@@ -205,15 +206,14 @@ async def main():
 
                                 if video_items:
                                     for item in video_items:
-                                        if "/api/search/" in url:
-                                            summary = {
-                                                "probable_id": item.get("id") or item.get("item_id") or item.get("aweme_id") or item.get("itemId") or "unknown",
-                                                "has_caption": any(k in item for k in ["desc", "title", "caption"]),
-                                                "has_author": any(k in item for k in ["author", "author_info", "authorInfo"]),
-                                                "has_video": "video" in item,
-                                                "has_stats": any(k in item for k in ["stats", "statistics", "statsV2"])
-                                            }
-                                            Actor.log.info(f"[NETWORK SEARCH] Candidate video summary: {summary}")
+                                        summary = {
+                                            "probable_id": item.get("id") or item.get("item_id") or item.get("aweme_id") or item.get("itemId") or "unknown",
+                                            "has_caption": any(k in item for k in ["desc", "title", "caption"]),
+                                            "has_author": any(k in item for k in ["author", "author_info", "authorInfo"]),
+                                            "has_video": "video" in item,
+                                            "has_stats": any(k in item for k in ["stats", "statistics", "statsV2"])
+                                        }
+                                        Actor.log.info(f"[NETWORK SEARCH] Candidate video summary from {url.split('?')[0][-25:]}: {summary}")
                                             
                                         parsed = parse_video(item, query)
                                         if parsed and parsed["video_id"] not in collected_videos:
@@ -273,6 +273,39 @@ async def main():
                         await page.wait_for_timeout(5000)
                 except Exception as e:
                     Actor.log.error(f"[DEBUG] Could not fetch page title/URL: {e}")
+
+                try:
+                    Actor.log.info("Performing user-like interactions...")
+                    await page.mouse.click(100, 100)
+                    await page.mouse.move(200, 300, steps=10)
+                    await page.mouse.move(400, 500, steps=10)
+                    await page.keyboard.press("Tab")
+                    await page.keyboard.press("Tab")
+                    await page.keyboard.press("Tab")
+                    await page.wait_for_timeout(1000)
+                    
+                    videos_tab = page.locator("text='Videos'").first
+                    if await videos_tab.is_visible():
+                        Actor.log.info("Clicking 'Videos' tab...")
+                        await videos_tab.click()
+                        await page.wait_for_timeout(2000)
+                    
+                    for _ in range(3):
+                        await page.mouse.wheel(0, 500)
+                        await page.wait_for_timeout(1000)
+                except Exception as e:
+                    Actor.log.warning(f"Error during interactions: {e}")
+
+                Actor.log.info("Collecting page snapshot diagnostics...")
+                try:
+                    body_text = await page.evaluate("document.body.innerText || ''")
+                    body_text_lower = body_text.lower()
+                    Actor.log.info(f"[DIAGNOSTICS] Body text length: {len(body_text)} chars")
+                    words_to_check = ["video", "celsius", "energy", "for you", "related", "users", "top"]
+                    found_words = [w for w in words_to_check if w in body_text_lower]
+                    Actor.log.info(f"[DIAGNOSTICS] Found keywords in visible text: {found_words}")
+                except Exception as e:
+                    Actor.log.warning(f"Error during diagnostics: {e}")
 
                 # Wait for initial content properly
                 try:
@@ -347,7 +380,7 @@ async def main():
                         
                         # Fallback DOM extraction strategy right off the live page inside the loop
                         vid_data_list = await page.evaluate('''() => {
-                            const links = Array.from(document.querySelectorAll('a[href*="/video/"]'));
+                            const links = Array.from(document.querySelectorAll('a'));
                             return links.map(a => {
                                 const container = a.closest('[class*="item-container"]') || a.closest('div');
                                 return {
@@ -357,36 +390,43 @@ async def main():
                             });
                         }''')
                         
+                        video_links_count = 0
+                        at_links_count = 0
                         new_links = 0
                         for vdata in vid_data_list:
                             link = vdata.get('href', '')
-                            text = vdata.get('text', '').replace('\\n', ' ').strip()
-                            try:
-                                vid = link.split('/video/')[1].split('?')[0]
-                                if vid and vid not in collected_videos and len(collected_videos) < max_videos_per_query:
-                                    username_part = link.split('/@')[1].split('/video')[0] if '/@' in link else "unknown"
-                                    parsed = {
-                                        "dataType": "video",
-                                        "video_id": vid,
-                                        "video_url": link,
-                                        "caption": text if text else "Fallback Extraction - Network Blocked",
-                                        "posted_at": datetime.datetime.utcnow().isoformat(),
-                                        "author_username": username_part,
-                                        "view_count": 0, "like_count": 0, "comment_count": 0, "share_count": 0,
-                                        "hashtags": [], "sound_metadata": {},
-                                        "scrape_timestamp": datetime.datetime.utcnow().isoformat(),
-                                        "query_context": query
-                                    }
-                                    collected_videos[vid] = parsed
-                                    await Actor.push_data(parsed)
-                                    new_links += 1
-                            except Exception:
-                                pass
+                            if '/video/' in link:
+                                video_links_count += 1
+                            if '/@' in link:
+                                at_links_count += 1
                                 
+                            text = vdata.get('text', '').replace('\\n', ' ').strip()
+                            if '/video/' in link:
+                                try:
+                                    vid = link.split('/video/')[1].split('?')[0]
+                                    if vid and vid not in collected_videos and len(collected_videos) < max_videos_per_query:
+                                        username_part = link.split('/@')[1].split('/video')[0] if '/@' in link else "unknown"
+                                        parsed = {
+                                            "dataType": "video",
+                                            "video_id": vid,
+                                            "video_url": link,
+                                            "caption": text if text else "Fallback Extraction - Network Blocked",
+                                            "posted_at": datetime.datetime.utcnow().isoformat(),
+                                            "author_username": username_part,
+                                            "view_count": 0, "like_count": 0, "comment_count": 0, "share_count": 0,
+                                            "hashtags": [], "sound_metadata": {},
+                                            "scrape_timestamp": datetime.datetime.utcnow().isoformat(),
+                                            "query_context": query
+                                        }
+                                        collected_videos[vid] = parsed
+                                        await Actor.push_data(parsed)
+                                        new_links += 1
+                                except Exception:
+                                    pass
+                                    
+                        Actor.log.info(f"[FALLBACK DOM] Total links with '/video/': {video_links_count}, Total links with '/@': {at_links_count}")
                         if new_links > 0:
-                            Actor.log.info(f"[FALLBACK DOM] Extracted {new_links} new video bounds directly from DOM. Total candidate links seen: {len(vid_data_list)}")
-                        elif len(vid_data_list) > 0:
-                            Actor.log.info(f"[FALLBACK DOM] Found {len(vid_data_list)} /video/ links but extracted 0 new items.")
+                            Actor.log.info(f"[FALLBACK DOM] Extracted {new_links} new video bounds directly from DOM.")
                             
                     except Exception as e:
                         Actor.log.warning(f"Error during scroll: {e}")
