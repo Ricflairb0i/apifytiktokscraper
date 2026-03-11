@@ -35,7 +35,7 @@ def main():
     print(f"Run Finished! ID: {run['id']}")
     print(f"Default Dataset ID (Videos): {run['defaultDatasetId']}")
     
-    print("Fetching actor datasets to locate 'comments_flat'...")
+    print("Fetching actor datasets to locate 'comments-flat'...")
     # List datasets attached to this run (apify-client has methods for this, or just default to UI link)
     print("Note: Use the dataset IDs with the export_results.py script to download CSV.")
 
