@@ -9,7 +9,8 @@
             "description": "The mode of scraping: keyword, hashtag, profile, or url.",
             "default": "keyword",
             "editor": "select",
-            "choices": ["keyword", "hashtag", "profile", "url"]
+            "enum": ["keyword", "hashtag", "profile", "url"],
+            "enumTitles": ["Keyword", "Hashtag", "Profile", "URL"]
         },
         "queries": {
             "title": "Queries",
