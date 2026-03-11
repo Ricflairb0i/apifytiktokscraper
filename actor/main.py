@@ -137,72 +137,89 @@ async def main():
                                 data = json.loads(text)
                                 
                                 if "/api/search/" in url and isinstance(data, dict):
+                                    Actor.log.info(f"[NETWORK SEARCH] Full URL: {url}")
                                     top_keys = list(data.keys())
                                     Actor.log.info(f"[NETWORK SEARCH] Top-level keys: {top_keys}")
+                                    
+                                    candidate_arrays = []
                                     if "data" in data:
                                         data_val = data["data"]
                                         if isinstance(data_val, dict):
-                                            Actor.log.info(f"[NETWORK SEARCH] Keys under 'data': {list(data_val.keys())}")
+                                            Actor.log.info(f"[NETWORK SEARCH] Keys inside 'data': {list(data_val.keys())}")
                                             for k, v in data_val.items():
                                                 if isinstance(v, list):
-                                                    Actor.log.info(f"[NETWORK SEARCH] Array found in 'data': {k} (length: {len(v)})")
+                                                    Actor.log.info(f"[NETWORK SEARCH] Array directly under 'data': {k} (length: {len(v)})")
+                                                    if len(v) > 0: candidate_arrays.append((k, v))
+                                                elif isinstance(v, dict):
+                                                    for nested_k, nested_v in v.items():
+                                                        if isinstance(nested_v, list):
+                                                            Actor.log.info(f"[NETWORK SEARCH] Nested array one level below 'data' ({k}.{nested_k}): length {len(nested_v)}")
+                                                            if len(nested_v) > 0: candidate_arrays.append((f"{k}.{nested_k}", nested_v))
                                         elif isinstance(data_val, list):
                                             Actor.log.info(f"[NETWORK SEARCH] 'data' itself is an array of length {len(data_val)}")
+                                            if len(data_val) > 0: candidate_arrays.append(("data", data_val))
                                             
-                                    def check_fields(obj, depth=0):
-                                        if depth > 3: return
-                                        if isinstance(obj, dict):
-                                            fields = ["item_list", "itemList", "aweme_list", "aweme_info", "item_info", "video", "author", "stats", "desc"]
-                                            found = [f for f in fields if f in obj]
-                                            if found:
-                                                Actor.log.info(f"[NETWORK SEARCH] Found object with candidate fields: {found} at depth {depth}")
+                                    for name, arr in candidate_arrays:
+                                        Actor.log.info(f"[NETWORK SEARCH] Inspecting candidate array: {name}")
+                                        for i, obj in enumerate(arr[:2]):
+                                            if isinstance(obj, dict):
+                                                keys = list(obj.keys())
+                                                expected_fields = ["id", "item_id", "aweme_id", "desc", "title", "author", "author_info", "video", "stats", "statistics", "create_time"]
+                                                found_fields = [f for f in expected_fields if f in keys]
+                                                Actor.log.info(f"[NETWORK SEARCH]   Item {i} contains fields: {found_fields}")
+
+                                # Walk arrays under data and nested objects under data
+                                video_items = []
+                                def extract_videos(obj, depth=0):
+                                    if depth > 5: return
+                                    if isinstance(obj, dict):
+                                        keys = obj.keys()
+                                        has_id = any(k in keys for k in ["id", "item_id", "aweme_id", "itemId"])
+                                        has_desc = any(k in keys for k in ["desc", "title", "caption"])
+                                        has_author = any(k in keys for k in ["author", "author_info", "authorInfo"])
+                                        has_video = "video" in keys
+                                        has_stats = any(k in keys for k in ["stats", "statistics", "statsV2"])
+                                        
+                                        if "item" in obj and isinstance(obj["item"], dict) and "video" in obj["item"]:
+                                            extract_videos(obj["item"], depth+1)
+                                        elif has_id and (has_video or has_author or has_stats):
+                                            video_items.append(obj)
+                                        else:
                                             for v in obj.values():
-                                                if isinstance(v, (dict, list)): check_fields(v, depth+1)
-                                        elif isinstance(obj, list) and len(obj) > 0:
-                                            check_fields(obj[0], depth+1)
-                                            
-                                    check_fields(data)
-                                
-                                # Log structural data presence broadly
-                                if isinstance(data, dict):
-                                    if "itemList" in data or "item_list" in data or "data" in data or "itemInfo" in data:
-                                        Actor.log.info(f"[NETWORK] Found potential video list structure. Keys: {list(data.keys())[:5]}")
-                                
-                                # Check for videos
-                                item_list = data.get("itemList") or data.get("item_list") or data.get("aweme_list")
-                                if not item_list and "data" in data:
-                                    if isinstance(data["data"], list):
-                                        item_list = data["data"]
-                                    elif isinstance(data["data"], dict):
-                                        for k, v in data["data"].items():
-                                            if isinstance(v, list) and any(f in k.lower() for f in ["list", "items", "data", "aweme", "video"]):
-                                                item_list = v
-                                                break
+                                                if isinstance(v, (dict, list)):
+                                                    extract_videos(v, depth+1)
+                                    elif isinstance(obj, list):
+                                        for item in obj:
+                                            if isinstance(item, (dict, list)):
+                                                extract_videos(item, depth+1)
                                                 
-                                if not item_list and data.get("itemInfo"):
-                                    Actor.log.info(f"[NETWORK] Found itemInfo struct.")
-                                    item_list = [data.get("itemInfo").get("itemStruct")]
-                                
-                                if item_list and isinstance(item_list, list):
-                                    found_count = 0
-                                    for item in item_list:
-                                        if isinstance(item, dict):
-                                            if found_count < 3 and "/api/search/" in url:
-                                                summary = {
-                                                    "id": item.get("id") or item.get("item_id") or item.get("aweme_id") or item.get("itemId"),
-                                                    "has_desc": "desc" in item or "title" in item,
-                                                    "has_author": "author" in item or "authorInfo" in item,
-                                                    "has_video": "video" in item,
-                                                    "has_stats": "stats" in item or "statistics" in item or "statsV2" in item
-                                                }
-                                                Actor.log.info(f"[NETWORK DEBUG] Candidate item summary: {summary}")
+                                if isinstance(data, dict):
+                                    if "data" in data and isinstance(data["data"], (dict, list)):
+                                        extract_videos(data["data"])
+                                    elif "itemList" in data or "item_list" in data or "aweme_list" in data:
+                                        lst = data.get("itemList") or data.get("item_list") or data.get("aweme_list")
+                                        if isinstance(lst, list):
+                                            extract_videos(lst)
+                                    else:
+                                        extract_videos(data)
+
+                                if video_items:
+                                    for item in video_items:
+                                        if "/api/search/" in url:
+                                            summary = {
+                                                "probable_id": item.get("id") or item.get("item_id") or item.get("aweme_id") or item.get("itemId") or "unknown",
+                                                "has_caption": any(k in item for k in ["desc", "title", "caption"]),
+                                                "has_author": any(k in item for k in ["author", "author_info", "authorInfo"]),
+                                                "has_video": "video" in item,
+                                                "has_stats": any(k in item for k in ["stats", "statistics", "statsV2"])
+                                            }
+                                            Actor.log.info(f"[NETWORK SEARCH] Candidate video summary: {summary}")
                                             
-                                            parsed = parse_video(item, query)
-                                            if parsed and parsed["video_id"] not in collected_videos:
-                                                if len(collected_videos) < max_videos_per_query:
-                                                    collected_videos[parsed["video_id"]] = parsed
-                                                    await Actor.push_data(parsed)
-                                                    found_count += 1
+                                        parsed = parse_video(item, query)
+                                        if parsed and parsed["video_id"] not in collected_videos:
+                                            if len(collected_videos) < max_videos_per_query:
+                                                collected_videos[parsed["video_id"]] = parsed
+                                                await Actor.push_data(parsed)
                                 
                                 # Check for comments
                                 comments_list = data.get("comments")
