@@ -110,298 +110,232 @@ async def main():
                     locale="en-US",
                     timezone_id="America/New_York"
                 )
-                page = await context.new_page()
                 
                 collected_videos = {}
                 collected_comments_count = {}
                 
-                api_intercept_count = 0
+                # DIAGNOSTICS TRACKING
+                request_counts = {"document": 0, "xhr": 0, "fetch": 0, "script": 0, "websocket": 0, "other": 0}
+                endpoint_family_counts = {
+                    "api_search": 0, "api_recommend": 0, "api_item": 0, "api_post": 0, 
+                    "graphql": 0, "discover": 0, "feed": 0, "general": 0, "other": 0
+                }
+                matched_request_urls = []
+                matched_response_urls = []
                 
+                page = await context.new_page()
+                
+                def log_request(request):
+                    rtype = request.resource_type
+                    if rtype in request_counts:
+                        request_counts[rtype] += 1
+                    else:
+                        request_counts["other"] += 1
+                        
+                    url = request.url.lower()
+                    query_clean = urllib.parse.quote(query).lower()
+                    query_space = query.replace(' ', '%20').lower()
+                    has_query = query_clean in url or query_space in url
+                    
+                    is_api = "/api/" in url or "/graphql" in url or "/search" in url or "/discover" in url or "/recommend" in url or "/feed" in url or "/list" in url or "/query" in url or "/aweme" in url or "/item" in url or "/post" in url or "/challenge" in url or "/general" in url
+                    if has_query or is_api:
+                        matched_request_urls.append(url)
+                        if "/api/search/" in url: endpoint_family_counts["api_search"] += 1
+                        elif "/api/recommend/" in url: endpoint_family_counts["api_recommend"] += 1
+                        elif "/api/item/" in url: endpoint_family_counts["api_item"] += 1
+                        elif "/api/post/" in url: endpoint_family_counts["api_post"] += 1
+                        elif "/graphql" in url: endpoint_family_counts["graphql"] += 1
+                        elif "/discover" in url: endpoint_family_counts["discover"] += 1
+                        elif "/feed" in url: endpoint_family_counts["feed"] += 1
+                        elif "/general" in url: endpoint_family_counts["general"] += 1
+                        else: endpoint_family_counts["other"] += 1
+
                 async def handle_response(response):
-                    nonlocal api_intercept_count
                     if response.request.resource_type in ["xhr", "fetch"]:
                         content_type = response.headers.get("content-type", "")
                         if "application/json" in content_type:
                             url = response.url
+                            url_lower = url.lower()
+                            query_clean = urllib.parse.quote(query).lower()
+                            query_space = query.replace(' ', '%20').lower()
                             
-                                # Log all matching TikTok API endpoints
-                            endpoints = ["/api/search/", "/api/post/", "/api/item/", "/api/recommend/", "/api/discover/", "/api/challenge/", "/api/general/", "/api/related/", "/api/"]
-                            if any(endpoint in url for endpoint in endpoints):
-                                api_intercept_count += 1
-                                Actor.log.info(f"[NETWORK] Intercepted relevant API response: {url}")
+                            is_target = "/api/" in url_lower or "/graphql" in url_lower or "/search" in url_lower or "/discover" in url_lower or "/recommend" in url_lower or "/feed" in url_lower or "/list" in url_lower or "/query" in url_lower or "/aweme" in url_lower or "/item" in url_lower or "/post" in url_lower or "/challenge" in url_lower or "/general" in url_lower
                             
-                            if query and (urllib.parse.quote(query).lower() in url.lower() or query.replace(' ', '%20').lower() in url.lower()):
-                                Actor.log.info(f"[NETWORK] Request contains query: {url}")
-                            
-                            try:
-                                text = await response.text()
-                                data = json.loads(text)
-                                
-                                if any(ep in url for ep in endpoints) and isinstance(data, dict):
-                                    Actor.log.info(f"[NETWORK SEARCH] Full URL: {url}")
-                                    top_keys = list(data.keys())
-                                    Actor.log.info(f"[NETWORK SEARCH] Top-level keys: {top_keys}")
-                                    
-                                    candidate_arrays = []
-                                    if "data" in data:
-                                        data_val = data["data"]
-                                        if isinstance(data_val, dict):
-                                            Actor.log.info(f"[NETWORK SEARCH] Keys inside 'data': {list(data_val.keys())}")
-                                            for k, v in data_val.items():
-                                                if isinstance(v, list):
-                                                    Actor.log.info(f"[NETWORK SEARCH] Array directly under 'data': {k} (length: {len(v)})")
-                                                    if len(v) > 0: candidate_arrays.append((k, v))
-                                                elif isinstance(v, dict):
-                                                    for nested_k, nested_v in v.items():
-                                                        if isinstance(nested_v, list):
-                                                            Actor.log.info(f"[NETWORK SEARCH] Nested array one level below 'data' ({k}.{nested_k}): length {len(nested_v)}")
-                                                            if len(nested_v) > 0: candidate_arrays.append((f"{k}.{nested_k}", nested_v))
-                                        elif isinstance(data_val, list):
-                                            Actor.log.info(f"[NETWORK SEARCH] 'data' itself is an array of length {len(data_val)}")
-                                            if len(data_val) > 0: candidate_arrays.append(("data", data_val))
-                                            
-                                    for name, arr in candidate_arrays:
-                                        Actor.log.info(f"[NETWORK SEARCH] Inspecting candidate array: {name}")
-                                        for i, obj in enumerate(arr[:2]):
-                                            if isinstance(obj, dict):
-                                                keys = list(obj.keys())
-                                                expected_fields = ["id", "item_id", "aweme_id", "desc", "title", "author", "author_info", "video", "stats", "statistics", "create_time"]
-                                                found_fields = [f for f in expected_fields if f in keys]
-                                                Actor.log.info(f"[NETWORK SEARCH]   Item {i} contains fields: {found_fields}")
-
-                                # Walk arrays under data and nested objects under data
-                                video_items = []
-                                def extract_videos(obj, depth=0):
-                                    if depth > 5: return
-                                    if isinstance(obj, dict):
-                                        keys = obj.keys()
-                                        has_id = any(k in keys for k in ["id", "item_id", "aweme_id", "itemId"])
-                                        has_desc = any(k in keys for k in ["desc", "title", "caption"])
-                                        has_author = any(k in keys for k in ["author", "author_info", "authorInfo"])
-                                        has_video = "video" in keys
-                                        has_stats = any(k in keys for k in ["stats", "statistics", "statsV2"])
+                            if is_target or query_clean in url_lower or query_space in url_lower:
+                                matched_response_urls.append(url)
+                                try:
+                                    text = await response.text()
+                                    data = json.loads(text)
+                                    if isinstance(data, dict):
+                                        Actor.log.info(f"[DEEP INSPECT] Target URL Found: {url}")
+                                        top_keys = list(data.keys())
+                                        Actor.log.info(f"   => Top-level keys: {top_keys}")
                                         
-                                        if "item" in obj and isinstance(obj["item"], dict) and "video" in obj["item"]:
-                                            extract_videos(obj["item"], depth+1)
-                                        elif has_id and (has_video or has_author or has_stats):
-                                            video_items.append(obj)
-                                        else:
-                                            for v in obj.values():
-                                                if isinstance(v, (dict, list)):
-                                                    extract_videos(v, depth+1)
-                                    elif isinstance(obj, list):
-                                        for item in obj:
-                                            if isinstance(item, (dict, list)):
-                                                extract_videos(item, depth+1)
+                                        candidate_arrays = []
+                                        if "data" in data:
+                                            dval = data["data"]
+                                            if isinstance(dval, dict):
+                                                Actor.log.info(f"   => Keys in 'data': {list(dval.keys())}")
+                                                for k, v in dval.items():
+                                                    if isinstance(v, list) and len(v) > 0:
+                                                        candidate_arrays.append((f"data.{k}", v))
+                                                    elif isinstance(v, dict):
+                                                        for nk, nv in v.items():
+                                                            if isinstance(nv, list) and len(nv) > 0:
+                                                                candidate_arrays.append((f"data.{k}.{nk}", nv))
+                                            elif isinstance(dval, list) and len(dval) > 0:
+                                                candidate_arrays.append(("data", dval))
                                                 
-                                if isinstance(data, dict):
-                                    if "data" in data and isinstance(data["data"], (dict, list)):
-                                        extract_videos(data["data"])
-                                    elif "itemList" in data or "item_list" in data or "aweme_list" in data:
-                                        lst = data.get("itemList") or data.get("item_list") or data.get("aweme_list")
-                                        if isinstance(lst, list):
-                                            extract_videos(lst)
-                                    else:
-                                        extract_videos(data)
+                                        for cname, carr in candidate_arrays:
+                                            Actor.log.info(f"   => Inspecting array '{cname}' (len {len(carr)})")
+                                            for idx, cobj in enumerate(carr[:2]):
+                                                if isinstance(cobj, dict):
+                                                    ckeys = list(cobj.keys())
+                                                    expected = ["id", "item_id", "aweme_id", "desc", "title", "caption", "author", "author_info", "video", "stats", "statistics", "create_time"]
+                                                    found = [f for f in expected if f in ckeys]
+                                                    Actor.log.info(f"       [{idx}] fields: {found}")
+                                                    
+                                        # Walk arrays under data and nested objects under data
+                                        video_items = []
+                                        def extract_videos(obj, depth=0):
+                                            if depth > 5: return
+                                            if isinstance(obj, dict):
+                                                keys = obj.keys()
+                                                has_id = any(k in keys for k in ["id", "item_id", "aweme_id", "itemId"])
+                                                has_desc = any(k in keys for k in ["desc", "title", "caption"])
+                                                has_author = any(k in keys for k in ["author", "author_info", "authorInfo"])
+                                                has_video = "video" in keys
+                                                has_stats = any(k in keys for k in ["stats", "statistics", "statsV2"])
+                                                
+                                                if "item" in obj and isinstance(obj["item"], dict) and "video" in obj["item"]:
+                                                    extract_videos(obj["item"], depth+1)
+                                                elif has_id and (has_video or has_author or has_stats):
+                                                    video_items.append(obj)
+                                                else:
+                                                    for v in obj.values():
+                                                        if isinstance(v, (dict, list)):
+                                                            extract_videos(v, depth+1)
+                                            elif isinstance(obj, list):
+                                                for item in obj:
+                                                    if isinstance(item, (dict, list)):
+                                                        extract_videos(item, depth+1)
+                                                        
+                                        if isinstance(data, dict):
+                                            if "data" in data and isinstance(data["data"], (dict, list)):
+                                                extract_videos(data["data"])
+                                            elif "itemList" in data or "item_list" in data or "aweme_list" in data:
+                                                lst = data.get("itemList") or data.get("item_list") or data.get("aweme_list")
+                                                if isinstance(lst, list): extract_videos(lst)
+                                            else:
+                                                extract_videos(data)
+        
+                                        if video_items:
+                                            for item in video_items:
+                                                summary = {
+                                                    "probable_id": item.get("id") or item.get("item_id") or item.get("aweme_id") or item.get("itemId") or "unknown",
+                                                    "has_caption": any(k in item for k in ["desc", "title", "caption"]),
+                                                    "has_author": any(k in item for k in ["author", "author_info", "authorInfo"]),
+                                                    "has_video": "video" in item,
+                                                    "has_stats": any(k in item for k in ["stats", "statistics", "statsV2"])
+                                                }
+                                                Actor.log.info(f"[NETWORK VIDEO SUMMARY] Extracted structure: {summary}")
+                                                    
+                                                parsed = parse_video(item, query)
+                                                if parsed and parsed["video_id"] not in collected_videos:
+                                                    if len(collected_videos) < max_videos_per_query:
+                                                        collected_videos[parsed["video_id"]] = parsed
+                                                        await Actor.push_data(parsed)
+                                except Exception as e:
+                                    pass
 
-                                if video_items:
-                                    for item in video_items:
-                                        summary = {
-                                            "probable_id": item.get("id") or item.get("item_id") or item.get("aweme_id") or item.get("itemId") or "unknown",
-                                            "has_caption": any(k in item for k in ["desc", "title", "caption"]),
-                                            "has_author": any(k in item for k in ["author", "author_info", "authorInfo"]),
-                                            "has_video": "video" in item,
-                                            "has_stats": any(k in item for k in ["stats", "statistics", "statsV2"])
-                                        }
-                                        Actor.log.info(f"[NETWORK SEARCH] Candidate video summary from {url.split('?')[0][-25:]}: {summary}")
-                                            
-                                        parsed = parse_video(item, query)
-                                        if parsed and parsed["video_id"] not in collected_videos:
-                                            if len(collected_videos) < max_videos_per_query:
-                                                collected_videos[parsed["video_id"]] = parsed
-                                                await Actor.push_data(parsed)
-                                
-                                # Check for comments
-                                comments_list = data.get("comments")
-                                if comments_list and isinstance(comments_list, list):
-                                    Actor.log.info(f"[NETWORK] Found {len(comments_list)} comments in API response.")
-                                    parsed_url = urllib.parse.urlparse(url)
-                                    aweme_id = urllib.parse.parse_qs(parsed_url.query).get("aweme_id")
-                                    vid = aweme_id[0] if aweme_id else "unknown"
-                                    
-                                    if vid not in collected_comments_count:
-                                        collected_comments_count[vid] = 0
-                                        
-                                    for c in comments_list:
-                                        if collected_comments_count[vid] < max_comments:
-                                            parsed_c = parse_comment(c, vid)
-                                            if parsed_c:
-                                                await Actor.push_data(parsed_c)
-                                                collected_comments_count[vid] += 1
-                            except Exception as e:
-                                pass
-                
+                page.on("request", log_request)
                 page.on("response", handle_response)
                 
-                url = ""
-                if mode == "keyword":
-                    url = f"https://www.tiktok.com/search/video?q={urllib.parse.quote(query)}"
-                elif mode == "hashtag":
-                    url = f"https://www.tiktok.com/tag/{urllib.parse.quote(query.replace('#', ''))}"
-                elif mode == "profile":
-                    url = f"https://www.tiktok.com/@{urllib.parse.quote(query.replace('@', ''))}"
-                elif mode == "url":
-                    url = query
-                    
-                Actor.log.info(f"Navigating to: {url}")
-                try:
-                    response = await page.goto(url, wait_until="networkidle", timeout=45000)
-                    Actor.log.info(f"Navigation complete. Server responded with status: {response.status if response else 'UNKNOWN'}")
-                except Exception as e:
-                    Actor.log.warning(f"Timeout or error navigating to primary page. Attempting to continue anyway. Error: {e}")
+                # Strategies Loop
+                strategies = [
+                    {"name": "DIRECT_VIDEO_SEARCH", "url": f"https://www.tiktok.com/search/video?q={urllib.parse.quote(query)}"},
+                    {"name": "GENERIC_SEARCH", "url": f"https://www.tiktok.com/search?q={urllib.parse.quote(query)}"},
+                    {"name": "UI_INTERACTION_ON_CURRENT_PAGE", "url": None}
+                ]
                 
-                # Debugging 1: Page Title and Current URL
-                try:
-                    title = await page.title()
-                    final_url = page.url
-                    Actor.log.info(f"[DEBUG] Final Page Title: {title}")
-                    Actor.log.info(f"[DEBUG] Final URL resolved to: {final_url}")
-                    
-                    if "captcha" in final_url.lower() or "verify" in title.lower() or "login" in title.lower():
-                        Actor.log.warning("[WARNING] High likelihood of TikTok Challenge/Captcha verification taking place!")
-                        # Wait a bit longer to see if it bypasses automatically
-                        await page.wait_for_timeout(5000)
-                except Exception as e:
-                    Actor.log.error(f"[DEBUG] Could not fetch page title/URL: {e}")
-
-                try:
-                    Actor.log.info("Performing user-like interactions...")
-                    await page.mouse.click(100, 100)
-                    await page.mouse.move(200, 300, steps=10)
-                    await page.mouse.move(400, 500, steps=10)
-                    await page.keyboard.press("Tab")
-                    await page.keyboard.press("Tab")
-                    await page.keyboard.press("Tab")
-                    await page.wait_for_timeout(1000)
-                    
-                    videos_tab = page.locator("text='Videos'").first
-                    if await videos_tab.is_visible():
-                        Actor.log.info("Clicking 'Videos' tab...")
-                        await videos_tab.click()
-                        await page.wait_for_timeout(2000)
-                    
-                    for _ in range(3):
-                        await page.mouse.wheel(0, 500)
-                        await page.wait_for_timeout(1000)
-                except Exception as e:
-                    Actor.log.warning(f"Error during interactions: {e}")
-
-                Actor.log.info("Collecting page snapshot diagnostics...")
-                try:
-                    body_text = await page.evaluate("document.body.innerText || ''")
-                    body_text_lower = body_text.lower()
-                    Actor.log.info(f"[DIAGNOSTICS] Body text length: {len(body_text)} chars")
-                    words_to_check = ["video", "celsius", "energy", "for you", "related", "users", "top"]
-                    found_words = [w for w in words_to_check if w in body_text_lower]
-                    Actor.log.info(f"[DIAGNOSTICS] Found keywords in visible text: {found_words}")
-                except Exception as e:
-                    Actor.log.warning(f"Error during diagnostics: {e}")
-
-                # Wait for initial content properly
-                try:
-                    Actor.log.info("Waiting for video elements or hydration to appear...")
-                    await page.wait_for_timeout(4000)
-                    
-                    # Count DOM video candidates
-                    dom_item_count = await page.locator("[data-e2e='search-card-user-link'], [data-e2e='video-author-avatar']").count()
-                    Actor.log.info(f"[DEBUG] Found {dom_item_count} candidate video elements currently in the DOM visually.")
-                except Exception as e:
-                    Actor.log.warning(f"Error while waiting for DOM elements: {e}")
-
-                # Extract Universal Data from HTML parsing initially
-                Actor.log.info("Looking for __UNIVERSAL_DATA_FOR_REHYDRATION__ embedded script...")
-                try:
-                    script_content = await page.evaluate("() => { const el = document.getElementById('__UNIVERSAL_DATA_FOR_REHYDRATION__'); return el ? el.textContent : null; }")
-                    if script_content:
-                        Actor.log.info(f"[REHYDRATION] Found embedded hydration script ({len(script_content)} bytes). Parsing...")
-                        data = json.loads(script_content)
-                        
-                        top_keys = list(data.keys())
-                        Actor.log.info(f"[REHYDRATION] Top-level keys: {top_keys}")
-                        for i, key in enumerate(top_keys[:3]):
-                            if isinstance(data[key], dict):
-                                Actor.log.info(f"[REHYDRATION] Nested keys for '{key}': {list(data[key].keys())[:10]}")
-                                
-                        # recursively search for anything that looks like a video object or list
-                        def find_items(obj, depth=0):
-                            items = []
-                            if depth > 10: return items
-                            if isinstance(obj, dict):
-                                # Heuristics for TikTok video object
-                                if ("id" in obj and "desc" in obj and "author" in obj) or \
-                                   ("item_id" in obj and "video" in obj) or \
-                                   ("aweme_id" in obj):
-                                   items.append(obj)
-                                elif str(obj.get("id", "")).isdigit() and len(str(obj.get("id", ""))) >= 18:
-                                    items.append(obj)
-                                else:
-                                    for k, v in obj.items():
-                                        items.extend(find_items(v, depth+1))
-                            elif isinstance(obj, list):
-                                for item in obj:
-                                    items.extend(find_items(item, depth+1))
-                            return items
-                        
-                        html_items = find_items(data)
-                        
-                        # Deduplicate parsed hydration items
-                        deduped_html_items = {str(item.get("id", item.get("item_id", ""))): item for item in html_items if str(item.get("id", item.get("item_id", "")))}.values()
-                        
-                        Actor.log.info(f"[REHYDRATION] Parsed {len(deduped_html_items)} unique candidate items from static HTML state.")
-                        for item in deduped_html_items:
-                            parsed = parse_video(item, query)
-                            if parsed and parsed["video_id"] not in collected_videos:
-                                if len(collected_videos) < max_videos_per_query:
-                                    collected_videos[parsed["video_id"]] = parsed
-                                    await Actor.push_data(parsed)
-                    else:
-                        Actor.log.warning("[REHYDRATION] No hydration script found on page. DOM might be fully blockaded or requires interaction.")
-                except Exception as e:
-                    Actor.log.error(f"[REHYDRATION ERROR] Failed to parse HTML state: {e}")
+                diagnostics_state = {}
                 
-                # Scroll to load more videos via API
-                Actor.log.info("Beginning auto-scroll procedure to trigger lazy loading APIs...")
-                scroll_attempts = 0
-                while len(collected_videos) < max_videos_per_query and scroll_attempts < 10:
+                for strat_idx, strategy in enumerate(strategies):
+                    if len(collected_videos) >= max_videos_per_query:
+                        break
+                        
+                    Actor.log.info(f"--- ATTEMPTING STRATEGY {strat_idx + 1}/{len(strategies)}: {strategy['name']} ---")
+                    
                     try:
-                        # Ensure we scroll effectively to bottom
-                        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                        await page.wait_for_timeout(3000)
+                        if strategy["url"]:
+                            Actor.log.info(f"Navigating to {strategy['url']}")
+                            await page.goto(strategy["url"], wait_until="networkidle", timeout=45000)
                         
-                        # Fallback DOM extraction strategy right off the live page inside the loop
-                        vid_data_list = await page.evaluate('''() => {
-                            const links = Array.from(document.querySelectorAll('a'));
-                            return links.map(a => {
-                                const container = a.closest('[class*="item-container"]') || a.closest('div');
-                                return {
-                                    href: a.href,
-                                    text: a.innerText || (container ? container.innerText : "")
-                                };
-                            });
-                        }''')
+                        title = await page.title()
+                        final_url = page.url
+                        Actor.log.info(f"[STRATEGY] Page Title: {title}")
+                        Actor.log.info(f"[STRATEGY] Final URL: {final_url}")
                         
-                        video_links_count = 0
-                        at_links_count = 0
-                        new_links = 0
-                        for vdata in vid_data_list:
-                            link = vdata.get('href', '')
-                            if '/video/' in link:
-                                video_links_count += 1
-                            if '/@' in link:
-                                at_links_count += 1
-                                
-                            text = vdata.get('text', '').replace('\\n', ' ').strip()
-                            if '/video/' in link:
+                        # Apply interactions for ALL strategies (but primarily meant for strategy 3)
+                        Actor.log.info("Performing user-like interactions to trigger client fetch...")
+                        await page.mouse.click(100, 100)
+                        await page.mouse.move(200, 300, steps=10)
+                        await page.mouse.move(400, 500, steps=10)
+                        # Tab navs can sometimes skip past invisible traps
+                        for _ in range(3): await page.keyboard.press("Tab")
+                        await page.wait_for_timeout(1000)
+                        
+                        # Attempt to click "Videos" tab if present
+                        try:
+                            videos_tab = page.locator("text='Videos'").first
+                            if await videos_tab.is_visible(timeout=2000):
+                                Actor.log.info("Clicking 'Videos' tab to force load...")
+                                await videos_tab.click()
+                                await page.wait_for_timeout(3000)
+                        except Exception:
+                            pass
+                            
+                        # Gradual scrolling
+                        for _ in range(4):
+                            await page.mouse.wheel(0, 500)
+                            await page.wait_for_timeout(1500)
+                            
+                        # Run Diagnostics specific to DOM state at the end of each strategy
+                        body_text = await page.evaluate("document.body.innerText || ''")
+                        body_text_lower = body_text.lower()
+                        words_to_check = ["video", "celsius", "energy", "for you", "related", "users", "top"]
+                        found_words = [w for w in words_to_check if w in body_text_lower]
+                        
+                        # Count DOM video candidates
+                        dom_video_links = await page.locator("a[href*='/video/']").count()
+                        dom_at_links = await page.locator("a[href*='/@']").count()
+                        
+                        diagnostics_state = {
+                            "title": title,
+                            "final_url": final_url,
+                            "body_length": len(body_text),
+                            "keywords_found": found_words,
+                            "dom_links_containing_video": dom_video_links,
+                            "dom_links_containing_at": dom_at_links
+                        }
+                        Actor.log.info(f"[STRATEGY DOM DIAGNOSTICS] {diagnostics_state}")
+                        
+                        # Hard DOM Extraction Fallback Check
+                        if dom_video_links > 0:
+                            Actor.log.info("Found /video/ links in DOM. Attempting fallback parse.")
+                            vid_data_list = await page.evaluate('''() => {
+                                const links = Array.from(document.querySelectorAll('a[href*="/video/"]'));
+                                return links.map(a => {
+                                    const container = a.closest('[class*="item-container"]') || a.closest('div');
+                                    return {
+                                        href: a.href,
+                                        text: a.innerText || (container ? container.innerText : "")
+                                    };
+                                });
+                            }''')
+                            for vdata in vid_data_list:
+                                link = vdata.get('href', '')
+                                text = vdata.get('text', '').replace('\\n', ' ').strip()
                                 try:
                                     vid = link.split('/video/')[1].split('?')[0]
                                     if vid and vid not in collected_videos and len(collected_videos) < max_videos_per_query:
@@ -420,44 +354,80 @@ async def main():
                                         }
                                         collected_videos[vid] = parsed
                                         await Actor.push_data(parsed)
-                                        new_links += 1
                                 except Exception:
                                     pass
                                     
-                        Actor.log.info(f"[FALLBACK DOM] Total links with '/video/': {video_links_count}, Total links with '/@': {at_links_count}")
-                        if new_links > 0:
-                            Actor.log.info(f"[FALLBACK DOM] Extracted {new_links} new video bounds directly from DOM.")
+                        if len(collected_videos) > 0:
+                            Actor.log.info(f"Strategy {strategy['name']} yielded results! Skipping remaining strategies.")
+                            break
                             
                     except Exception as e:
-                        Actor.log.warning(f"Error during scroll: {e}")
-                    scroll_attempts += 1
+                        Actor.log.warning(f"Strategy {strategy['name']} threw an exception: {e}")
+
+                # HARD DIAGNOSTICS & CONCLUSION FOR QUERY
+                Actor.log.info("--- END OF SCRAPING PIPELINE, EVALUATING RESULTS ---")
                 
-                Actor.log.info(f"[NETWORK TOTAL] Caught {api_intercept_count} relevant API requests during runtime.")
-                Actor.log.info(f"Finished processing. Collected {len(collected_videos)} total videos for query: {query}")
-                
-                if fetch_comments:
-                    for vid_id, vid_data in list(collected_videos.items())[:max_videos_per_query]:
-                        Actor.log.info(f"Fetching comments for video: {vid_id}")
-                        try:
-                            video_page = await context.new_page()
-                            video_page.on("response", handle_response)
-                            await video_page.goto(vid_data["video_url"], wait_until="networkidle", timeout=30000)
-                            
-                            c_scrolls = 0
-                            while collected_comments_count.get(vid_id, 0) < max_comments and c_scrolls < 10:
-                                await video_page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                                await video_page.wait_for_timeout(2500)
-                                c_scrolls += 1
-                            
-                            await video_page.close()
-                        except Exception as e:
-                            Actor.log.warning(f"Error fetching comments for {vid_id}: {e}")
+                if len(collected_videos) == 0:
+                    Actor.log.error(f"FAILURE: 0 videos found for query: {query}. Saving hard diagnostic artifacts.")
+                    # 1. Screenshot
+                    try:
+                        screenshot = await page.screenshot(full_page=True)
+                        query_slug = query.replace(" ", "_").lower()
+                        await Actor.set_value(f"screenshot_{query_slug}", screenshot, content_type="image/jpeg")
+                        Actor.log.info(f"Saved screenshot to KeyValueStore as 'screenshot_{query_slug}'")
+                    except Exception as e:
+                        Actor.log.error(f"Failed to capture screenshot: {e}")
+                    
+                    # 2. Raw HTML
+                    try:
+                        content = await page.content()
+                        await Actor.set_value(f"snapshot_{query_slug}", content, content_type="text/html")
+                        Actor.log.info(f"Saved HTML snapshot to KeyValueStore as 'snapshot_{query_slug}'")
+                    except Exception as e:
+                        Actor.log.error(f"Failed to capture HTML snapshot: {e}")
+                        
+                    # 3. Debug JSON Artifact
+                    try:
+                        debug_data = {
+                            "query": query,
+                            "timestamp": datetime.datetime.utcnow().isoformat(),
+                            "request_resource_counts": request_counts,
+                            "network_endpoint_counts": endpoint_family_counts,
+                            "matched_request_urls": matched_request_urls,
+                            "matched_response_urls": matched_response_urls,
+                            "final_dom_state": diagnostics_state
+                        }
+                        await Actor.set_value(f"debug_diagnostics_{query_slug}", debug_data)
+                        Actor.log.info(f"Saved diagnostic JSON to KeyValueStore as 'debug_diagnostics_{query_slug}'")
+                    except Exception as e:
+                        Actor.log.error(f"Failed to save diagnostic JSON: {e}")
+
+                    # Final Fallback Conclusion Rule Engine
+                    Actor.log.info("\n--- DIAGNOSTIC CONCLUSION ---")
+                    has_video_links = diagnostics_state.get("dom_links_containing_video", 0) > 0
+                    has_search_api = endpoint_family_counts.get("api_search", 0) > 0
+                    has_graphql = endpoint_family_counts.get("graphql", 0) > 0
+                    looks_like_shell = 'tiktok' in diagnostics_state.get("final_url", "").lower()
+                    
+                    if has_video_links:
+                        Actor.log.info("CONCLUSION: DOM rendered result cards dynamically, but network parser missed the payload shape.")
+                    elif not looks_like_shell:
+                        Actor.log.info("CONCLUSION: Probable environment/platform gating - final URL suggests a block or redirect.")
+                    elif has_graphql and not has_search_api:
+                        Actor.log.info("CONCLUSION: TikTok may be serving GraphQL queries for this account/geo instead of standard /api/search endpoints.")
+                    elif has_search_api and not has_video_links:
+                        Actor.log.info("CONCLUSION: Helper endpoints and skeleton fired, actual result payload (or DOM rendering) was suppressed, implying block/cookie requirement.")
+                    else:
+                        Actor.log.info("CONCLUSION: Shell loads but result payload completely absent. Probable need for authenticated session or different source strategy entirely.")
+                    Actor.log.info("-----------------------------\n")
+                else:
+                    Actor.log.info(f"SUCCESS: Collected {len(collected_videos)} videos for query: {query}.")
                 
                 await context.close()
             
             await browser.close()
             
-        Actor.log.info("Scraping completed.")
+        Actor.log.info("Scraping finished.")
 
 if __name__ == '__main__':
     asyncio.run(main())
