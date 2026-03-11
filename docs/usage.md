@@ -13,7 +13,7 @@ This actor scrapes TikTok metric and comment data based on a list of input queri
 3. Set your desired limits (`max_videos` and `max_comments_per_video`).
 4. Click **Start**.
 5. Once complete, navigate to the **Storage** tab. You can download the video data directly from the default dataset.
-6. To get the comments, find the dataset named `comments_flat` from your account's Storage page.
+6. To get the comments, find the dataset named `comments-flat` from your account's Storage page.
 
 ### Option 2: Running programmatically via Apify Client (Local/Remote)
 Use the included `client/run_actor.py` script to trigger the task from an external service.
@@ -36,4 +36,4 @@ export COMMENTS_DATASET_ID="dataset456..."
 
 python tiktok-apify-scraper/client/export_results.py
 ```
-This produces `videos_flat.csv` and `comments_flat.csv`.
+This produces `videos-flat.csv` and `comments-flat.csv`.

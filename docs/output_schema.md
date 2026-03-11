@@ -2,7 +2,7 @@
 
 The actor produces raw data structured strictly for analytical extractions. It saves output into two separate datasets based on entity type to maintain table-like structures without nested arrays.
 
-## 1. `videos_raw` (Default Dataset)
+## 1. `videos-raw` (Default Dataset)
 Each item pushed into the default dataset represents one TikTok video.
 
 | Field             | Type   | Description                                           |
@@ -21,9 +21,9 @@ Each item pushed into the default dataset represents one TikTok video.
 | `scrape_timestamp`| string | ISO timestamp of the exact time of extraction.        |
 | `query_context`   | string | The original query that yielded this video.           |
 
-## 2. `comments_flat` (Named Dataset)
+## 2. `comments-flat` (Named Dataset)
 
-If the run is configured with `fetch_comments = true`, the actor pushes comments into a dataset named `comments_flat`.
+If the run is configured with `fetch_comments = true`, the actor pushes comments into a dataset named `comments-flat`.
 
 | Field               | Type   | Description                                          |
 |---------------------|--------|------------------------------------------------------|

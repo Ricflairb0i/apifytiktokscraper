@@ -2,8 +2,8 @@
 Standalone Apify Actor for scraping TikTok video metadata and comments.
 Expected Input: mode, queries, max_videos, fetch_comments, max_comments_per_video
 Outputs:
-- Default Dataset (or 'videos_raw'): TikTok Video Metadata
-- 'comments_flat' Dataset: Flat comment properties
+- Default Dataset (or 'videos-raw'): TikTok Video Metadata
+- 'comments-flat' Dataset: Flat comment properties
 """
 import asyncio
 import os
@@ -62,7 +62,7 @@ async def main():
         Actor.log.info(f"Queries: {queries}")
         
         # Open separate dataset for comments
-        comments_dataset = await Actor.open_dataset(name="comments_flat")
+        comments_dataset = await Actor.open_dataset(name="comments-flat")
         
         # 2. Scrape Videos
         # (Placeholder for real TikTok fetching logic - e.g., using Playwright or httpx)

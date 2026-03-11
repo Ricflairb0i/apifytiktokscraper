@@ -43,12 +43,12 @@ def main():
     comments_dataset_id = os.getenv("COMMENTS_DATASET_ID")
     
     if videos_dataset_id:
-        export_dataset_to_csv(client, videos_dataset_id, "videos_flat.csv", is_video=True)
+        export_dataset_to_csv(client, videos_dataset_id, "videos-flat.csv", is_video=True)
     else:
         print("VIDEOS_DATASET_ID not set, skipping videos export.")
         
     if comments_dataset_id:
-        export_dataset_to_csv(client, comments_dataset_id, "comments_flat.csv", is_video=False)
+        export_dataset_to_csv(client, comments_dataset_id, "comments-flat.csv", is_video=False)
     else:
         print("COMMENTS_DATASET_ID not set, skipping comments export.")
 
