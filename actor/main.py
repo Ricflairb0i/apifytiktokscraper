@@ -1,6 +1,6 @@
 import asyncio
 import json
-import.datetime
+import datetime
 import urllib.parse
 from apify import Actor
 from playwright.async_api import async_playwright
@@ -321,5 +321,4 @@ async def main():
         Actor.log.info("Scraping completed.")
 
 if __name__ == '__main__':
-    import datetime
     asyncio.run(main())
