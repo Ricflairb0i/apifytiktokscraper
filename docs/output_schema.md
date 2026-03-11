@@ -1,12 +1,15 @@
 # Output Schema
 
-The actor produces raw data structured strictly for analytical extractions. It saves output into two separate datasets based on entity type to maintain table-like structures without nested arrays.
+The actor produces raw data structured strictly for analytical extractions. To ensure compatibility with Apify's `LIMITED_PERMISSIONS` mode, all data (both videos and comments) is saved to the **Default Dataset**. 
 
-## 1. `videos-raw` (Default Dataset)
-Each item pushed into the default dataset represents one TikTok video.
+To differentiate between a video record and a comment record, every item contains a `dataType` field.
+
+## 1. Video Format (`dataType: "video"`)
+Each video item pushed into the default dataset represents one TikTok video.
 
 | Field             | Type   | Description                                           |
 |-------------------|--------|-------------------------------------------------------|
+| `dataType`        | string | Always `"video"` for these records.                   |
 | `video_id`        | string | Unique identifier of the TikTok video.               |
 | `video_url`       | string | Direct URL to the video.                              |
 | `caption`         | string | The text caption/description of the video.            |
@@ -21,12 +24,13 @@ Each item pushed into the default dataset represents one TikTok video.
 | `scrape_timestamp`| string | ISO timestamp of the exact time of extraction.        |
 | `query_context`   | string | The original query that yielded this video.           |
 
-## 2. `comments-flat` (Named Dataset)
+## 2. Comment Format (`dataType: "comment"`)
 
-If the run is configured with `fetch_comments = true`, the actor pushes comments into a dataset named `comments-flat`.
+If the run is configured with `fetch_comments = true`, the actor pushes comments into the **same** default dataset.
 
 | Field               | Type   | Description                                          |
 |---------------------|--------|------------------------------------------------------|
+| `dataType`          | string | Always `"comment"` for these records.                |
 | `video_id`          | string | ID of the video this comment belongs to.             |
 | `comment_id`        | string | Unique identifier for the comment.                   |
 | `comment_text`      | string | The raw text of the comment.                         |

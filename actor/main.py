@@ -32,6 +32,7 @@ def parse_video(item, query):
         if not isinstance(sound, dict): sound = {}
 
         return {
+            "dataType": "video",
             "video_id": video_id,
             "video_url": f"https://www.tiktok.com/@{author_username}/video/{video_id}",
             "caption": caption,
@@ -61,6 +62,7 @@ def parse_comment(c_item, video_id):
         user = c_item.get("user", {})
         if not isinstance(user, dict): user = {}
         return {
+            "dataType": "comment",
             "video_id": video_id,
             "comment_id": cid,
             "comment_text": c_item.get("text", ""),
@@ -84,8 +86,6 @@ async def main():
         
         Actor.log.info(f"Starting TikTok Scraper in {mode} mode.")
         Actor.log.info(f"Queries: {queries}")
-        
-        comments_dataset = await Actor.open_dataset(name="comments-flat")
         
         async with async_playwright() as p:
             browser = await p.chromium.launch(
@@ -163,7 +163,7 @@ async def main():
                                         if collected_comments_count[vid] < max_comments:
                                             parsed_c = parse_comment(c, vid)
                                             if parsed_c:
-                                                await comments_dataset.push_data(parsed_c)
+                                                await Actor.push_data(parsed_c)
                                                 collected_comments_count[vid] += 1
                             except Exception as e:
                                 pass
@@ -270,6 +270,7 @@ async def main():
                                     # Very basic fallback object since network blocked us
                                     username_part = link.split('/@')[1].split('/video')[0] if '/@' in link else "unknown"
                                     parsed = {
+                                        "dataType": "video",
                                         "video_id": vid,
                                         "video_url": link,
                                         "caption": "Fallback Extraction - Network Blocked",

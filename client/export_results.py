@@ -17,6 +17,15 @@ def export_dataset_to_csv(client: ApifyClient, dataset_id: str, output_csv_path:
         
     df = pd.DataFrame(items)
     
+    # Filter by dataType if present
+    if 'dataType' in df.columns:
+        target_type = 'video' if is_video else 'comment'
+        df = df[df['dataType'] == target_type].copy()
+        
+        if df.empty:
+            print(f"No items of dataType '{target_type}' found in dataset {dataset_id}.")
+            return
+    
     # Flattening specific fields like sound_metadata if video
     if is_video and 'sound_metadata' in df.columns:
         # Extract fields from nested dictionary if they exist
@@ -39,18 +48,13 @@ def main():
     client = ApifyClient(token)
     
     # You would typically pass these as arguments
-    videos_dataset_id = os.getenv("VIDEOS_DATASET_ID")
-    comments_dataset_id = os.getenv("COMMENTS_DATASET_ID")
+    dataset_id = os.getenv("DATASET_ID") or os.getenv("VIDEOS_DATASET_ID")
     
-    if videos_dataset_id:
-        export_dataset_to_csv(client, videos_dataset_id, "videos-flat.csv", is_video=True)
+    if dataset_id:
+        export_dataset_to_csv(client, dataset_id, "videos-flat.csv", is_video=True)
+        export_dataset_to_csv(client, dataset_id, "comments-flat.csv", is_video=False)
     else:
-        print("VIDEOS_DATASET_ID not set, skipping videos export.")
-        
-    if comments_dataset_id:
-        export_dataset_to_csv(client, comments_dataset_id, "comments-flat.csv", is_video=False)
-    else:
-        print("COMMENTS_DATASET_ID not set, skipping comments export.")
+        print("DATASET_ID not set, skipping export.")
 
 if __name__ == "__main__":
     main()

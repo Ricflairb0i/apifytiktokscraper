@@ -33,11 +33,11 @@ def main():
     run = client.actor(actor_id).call(run_input=run_input)
     
     print(f"Run Finished! ID: {run['id']}")
-    print(f"Default Dataset ID (Videos): {run['defaultDatasetId']}")
+    print(f"Default Dataset ID: {run['defaultDatasetId']}")
     
-    print("Fetching actor datasets to locate 'comments-flat'...")
-    # List datasets attached to this run (apify-client has methods for this, or just default to UI link)
-    print("Note: Use the dataset IDs with the export_results.py script to download CSV.")
+    print("Both videos and comments are stored in the default dataset.")
+    print("Note: Export the dataset using the defaultDatasetId with export_results.py to download CSVs.")
+    print(f"export DATASET_ID='{run['defaultDatasetId']}'")
 
 if __name__ == "__main__":
     main()
