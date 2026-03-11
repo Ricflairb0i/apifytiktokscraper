@@ -125,13 +125,43 @@ async def main():
                             url = response.url
                             
                             # Log all matching TikTok API endpoints
-                            if any(endpoint in url for endpoint in ["/api/search/", "/api/post/", "/api/item/", "/api/recommend/", "/api/comment/"]):
+                            if "/api/search/" in url:
                                 api_intercept_count += 1
-                                Actor.log.info(f"[NETWORK] Intercepted relevant API response: {url.split('?')[0]}")
+                                Actor.log.info(f"[NETWORK] Intercepted search API response: {url}")
+                            elif any(endpoint in url for endpoint in ["/api/post/", "/api/item/", "/api/recommend/", "/api/comment/"]):
+                                api_intercept_count += 1
+                                Actor.log.info(f"[NETWORK] Intercepted other relevant API response: {url.split('?')[0]}")
                             
                             try:
                                 text = await response.text()
                                 data = json.loads(text)
+                                
+                                if "/api/search/" in url and isinstance(data, dict):
+                                    top_keys = list(data.keys())
+                                    Actor.log.info(f"[NETWORK SEARCH] Top-level keys: {top_keys}")
+                                    if "data" in data:
+                                        data_val = data["data"]
+                                        if isinstance(data_val, dict):
+                                            Actor.log.info(f"[NETWORK SEARCH] Keys under 'data': {list(data_val.keys())}")
+                                            for k, v in data_val.items():
+                                                if isinstance(v, list):
+                                                    Actor.log.info(f"[NETWORK SEARCH] Array found in 'data': {k} (length: {len(v)})")
+                                        elif isinstance(data_val, list):
+                                            Actor.log.info(f"[NETWORK SEARCH] 'data' itself is an array of length {len(data_val)}")
+                                            
+                                    def check_fields(obj, depth=0):
+                                        if depth > 3: return
+                                        if isinstance(obj, dict):
+                                            fields = ["item_list", "itemList", "aweme_list", "aweme_info", "item_info", "video", "author", "stats", "desc"]
+                                            found = [f for f in fields if f in obj]
+                                            if found:
+                                                Actor.log.info(f"[NETWORK SEARCH] Found object with candidate fields: {found} at depth {depth}")
+                                            for v in obj.values():
+                                                if isinstance(v, (dict, list)): check_fields(v, depth+1)
+                                        elif isinstance(obj, list) and len(obj) > 0:
+                                            check_fields(obj[0], depth+1)
+                                            
+                                    check_fields(data)
                                 
                                 # Log structural data presence broadly
                                 if isinstance(data, dict):
@@ -139,19 +169,40 @@ async def main():
                                         Actor.log.info(f"[NETWORK] Found potential video list structure. Keys: {list(data.keys())[:5]}")
                                 
                                 # Check for videos
-                                item_list = data.get("itemList") or data.get("item_list") or data.get("data")
+                                item_list = data.get("itemList") or data.get("item_list") or data.get("aweme_list")
+                                if not item_list and "data" in data:
+                                    if isinstance(data["data"], list):
+                                        item_list = data["data"]
+                                    elif isinstance(data["data"], dict):
+                                        for k, v in data["data"].items():
+                                            if isinstance(v, list) and any(f in k.lower() for f in ["list", "items", "data", "aweme", "video"]):
+                                                item_list = v
+                                                break
+                                                
                                 if not item_list and data.get("itemInfo"):
                                     Actor.log.info(f"[NETWORK] Found itemInfo struct.")
                                     item_list = [data.get("itemInfo").get("itemStruct")]
                                 
                                 if item_list and isinstance(item_list, list):
+                                    found_count = 0
                                     for item in item_list:
                                         if isinstance(item, dict):
+                                            if found_count < 3 and "/api/search/" in url:
+                                                summary = {
+                                                    "id": item.get("id") or item.get("item_id") or item.get("aweme_id") or item.get("itemId"),
+                                                    "has_desc": "desc" in item or "title" in item,
+                                                    "has_author": "author" in item or "authorInfo" in item,
+                                                    "has_video": "video" in item,
+                                                    "has_stats": "stats" in item or "statistics" in item or "statsV2" in item
+                                                }
+                                                Actor.log.info(f"[NETWORK DEBUG] Candidate item summary: {summary}")
+                                            
                                             parsed = parse_video(item, query)
                                             if parsed and parsed["video_id"] not in collected_videos:
                                                 if len(collected_videos) < max_videos_per_query:
                                                     collected_videos[parsed["video_id"]] = parsed
                                                     await Actor.push_data(parsed)
+                                                    found_count += 1
                                 
                                 # Check for comments
                                 comments_list = data.get("comments")
