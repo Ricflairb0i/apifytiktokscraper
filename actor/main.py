@@ -7,36 +7,42 @@ from playwright.async_api import async_playwright
 
 def parse_video(item, query):
     try:
-        video_id = item.get("id") or item.get("item_id")
+        video_id = item.get("id") or item.get("item_id") or item.get("itemId") or item.get("aweme_id")
         if not video_id: return None
         
         author = item.get("author", {})
-        if isinstance(author, str):
-            author_username = author
-        else:
-            author_username = author.get("uniqueId") or author.get("unique_id") or "unknown"
+        if not isinstance(author, dict): author = {}
         
-        stats = item.get("stats", {})
+        author_username = author.get("uniqueId") or author.get("unique_id") or author.get("secUid") or "unknown"
+        if not author_username and isinstance(author, str):
+            author_username = author
+            
+        stats = item.get("stats", {}) or item.get("statistics", {}) or item.get("statsV2", {})
         if not isinstance(stats, dict): stats = {}
         
-        caption = item.get("desc", "")
+        caption = item.get("desc", "") or item.get("title", "") or item.get("caption", "")
         
         hashtags = []
-        text_extra = item.get("textExtra") or item.get("text_extra") or []
-        for extra in text_extra:
-            hashtag = extra.get("hashtagName")
-            if hashtag:
-                hashtags.append(f"#{hashtag}")
+        text_extra = item.get("textExtra") or item.get("text_extra") or item.get("challenges") or []
+        if isinstance(text_extra, list):
+            for extra in text_extra:
+                if isinstance(extra, dict):
+                    hashtag = extra.get("hashtagName") or extra.get("title")
+                    if hashtag:
+                        hashtags.append(f"#{hashtag}")
                 
-        sound = item.get("music", {})
+        sound = item.get("music", {}) or item.get("sound", {})
         if not isinstance(sound, dict): sound = {}
+        
+        create_time = item.get("createTime") or item.get("create_time") or 0
+        posted_at = datetime.datetime.utcfromtimestamp(int(create_time)).isoformat() if create_time else None
 
         return {
             "dataType": "video",
             "video_id": video_id,
             "video_url": f"https://www.tiktok.com/@{author_username}/video/{video_id}",
             "caption": caption,
-            "posted_at": datetime.datetime.utcfromtimestamp(int(item.get("createTime", 0))).isoformat() if item.get("createTime") else None,
+            "posted_at": posted_at,
             "author_username": author_username,
             "view_count": stats.get("playCount", 0),
             "like_count": stats.get("diggCount", 0),
@@ -118,8 +124,8 @@ async def main():
                         if "application/json" in content_type:
                             url = response.url
                             
-                            # Log API hits that look like TikTok data endpoints to track what we're actually seeing
-                            if "api/search/general" in url or "api/search/item" in url or "api/comment/list" in url or "api/post/item_list" in url or "api/item/detail" in url:
+                            # Log all matching TikTok API endpoints
+                            if any(endpoint in url for endpoint in ["/api/search/", "/api/post/", "/api/item/", "/api/recommend/", "/api/comment/"]):
                                 api_intercept_count += 1
                                 Actor.log.info(f"[NETWORK] Intercepted relevant API response: {url.split('?')[0]}")
                             
@@ -127,14 +133,13 @@ async def main():
                                 text = await response.text()
                                 data = json.loads(text)
                                 
-                                # Log structural data presence
-                                if "itemList" in data:
-                                    Actor.log.info(f"[NETWORK] Found itemList with {len(data['itemList'])} items in response.")
-                                elif "item_list" in data:
-                                    Actor.log.info(f"[NETWORK] Found item_list with {len(data['item_list'])} items in response.")
+                                # Log structural data presence broadly
+                                if isinstance(data, dict):
+                                    if "itemList" in data or "item_list" in data or "data" in data or "itemInfo" in data:
+                                        Actor.log.info(f"[NETWORK] Found potential video list structure. Keys: {list(data.keys())[:5]}")
                                 
                                 # Check for videos
-                                item_list = data.get("itemList") or data.get("item_list")
+                                item_list = data.get("itemList") or data.get("item_list") or data.get("data")
                                 if not item_list and data.get("itemInfo"):
                                     Actor.log.info(f"[NETWORK] Found itemInfo struct.")
                                     item_list = [data.get("itemInfo").get("itemStruct")]
@@ -219,24 +224,40 @@ async def main():
                     if script_content:
                         Actor.log.info(f"[REHYDRATION] Found embedded hydration script ({len(script_content)} bytes). Parsing...")
                         data = json.loads(script_content)
-                        # recursively search for "itemStruct" or "itemList"
-                        def find_items(obj):
+                        
+                        top_keys = list(data.keys())
+                        Actor.log.info(f"[REHYDRATION] Top-level keys: {top_keys}")
+                        for i, key in enumerate(top_keys[:3]):
+                            if isinstance(data[key], dict):
+                                Actor.log.info(f"[REHYDRATION] Nested keys for '{key}': {list(data[key].keys())[:10]}")
+                                
+                        # recursively search for anything that looks like a video object or list
+                        def find_items(obj, depth=0):
                             items = []
+                            if depth > 10: return items
                             if isinstance(obj, dict):
-                                if "itemStruct" in obj and isinstance(obj["itemStruct"], dict):
-                                    items.append(obj["itemStruct"])
-                                elif "itemList" in obj and isinstance(obj["itemList"], list):
-                                    items.extend(obj["itemList"])
-                                for k, v in obj.items():
-                                    items.extend(find_items(v))
+                                # Heuristics for TikTok video object
+                                if ("id" in obj and "desc" in obj and "author" in obj) or \
+                                   ("item_id" in obj and "video" in obj) or \
+                                   ("aweme_id" in obj):
+                                   items.append(obj)
+                                elif str(obj.get("id", "")).isdigit() and len(str(obj.get("id", ""))) >= 18:
+                                    items.append(obj)
+                                else:
+                                    for k, v in obj.items():
+                                        items.extend(find_items(v, depth+1))
                             elif isinstance(obj, list):
                                 for item in obj:
-                                    items.extend(find_items(item))
+                                    items.extend(find_items(item, depth+1))
                             return items
                         
                         html_items = find_items(data)
-                        Actor.log.info(f"[REHYDRATION] Parsed {len(html_items)} items from static HTML state.")
-                        for item in html_items:
+                        
+                        # Deduplicate parsed hydration items
+                        deduped_html_items = {str(item.get("id", item.get("item_id", ""))): item for item in html_items if str(item.get("id", item.get("item_id", "")))}.values()
+                        
+                        Actor.log.info(f"[REHYDRATION] Parsed {len(deduped_html_items)} unique candidate items from static HTML state.")
+                        for item in deduped_html_items:
                             parsed = parse_video(item, query)
                             if parsed and parsed["video_id"] not in collected_videos:
                                 if len(collected_videos) < max_videos_per_query:
@@ -257,23 +278,30 @@ async def main():
                         await page.wait_for_timeout(3000)
                         
                         # Fallback DOM extraction strategy right off the live page inside the loop
-                        vid_links = await page.evaluate('''() => {
+                        vid_data_list = await page.evaluate('''() => {
                             const links = Array.from(document.querySelectorAll('a[href*="/video/"]'));
-                            return links.map(a => a.href).filter((v, i, a) => a.indexOf(v) === i);
+                            return links.map(a => {
+                                const container = a.closest('[class*="item-container"]') || a.closest('div');
+                                return {
+                                    href: a.href,
+                                    text: a.innerText || (container ? container.innerText : "")
+                                };
+                            });
                         }''')
                         
                         new_links = 0
-                        for link in vid_links:
+                        for vdata in vid_data_list:
+                            link = vdata.get('href', '')
+                            text = vdata.get('text', '').replace('\\n', ' ').strip()
                             try:
                                 vid = link.split('/video/')[1].split('?')[0]
                                 if vid and vid not in collected_videos and len(collected_videos) < max_videos_per_query:
-                                    # Very basic fallback object since network blocked us
                                     username_part = link.split('/@')[1].split('/video')[0] if '/@' in link else "unknown"
                                     parsed = {
                                         "dataType": "video",
                                         "video_id": vid,
                                         "video_url": link,
-                                        "caption": "Fallback Extraction - Network Blocked",
+                                        "caption": text if text else "Fallback Extraction - Network Blocked",
                                         "posted_at": datetime.datetime.utcnow().isoformat(),
                                         "author_username": username_part,
                                         "view_count": 0, "like_count": 0, "comment_count": 0, "share_count": 0,
@@ -288,7 +316,9 @@ async def main():
                                 pass
                                 
                         if new_links > 0:
-                            Actor.log.info(f"[FALLBACK DOM] Extracted {new_links} basic video bounds directly from DOM.")
+                            Actor.log.info(f"[FALLBACK DOM] Extracted {new_links} new video bounds directly from DOM. Total candidate links seen: {len(vid_data_list)}")
+                        elif len(vid_data_list) > 0:
+                            Actor.log.info(f"[FALLBACK DOM] Found {len(vid_data_list)} /video/ links but extracted 0 new items.")
                             
                     except Exception as e:
                         Actor.log.warning(f"Error during scroll: {e}")
