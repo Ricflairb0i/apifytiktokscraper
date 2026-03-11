@@ -1,0 +1,4 @@
+apify>=1.6.0
+apify-client>=1.4.0
+httpx>=0.25.0
+playwright>=1.39.0

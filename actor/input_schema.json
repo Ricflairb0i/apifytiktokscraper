@@ -1,0 +1,41 @@
+{
+    "title": "TikTok Scraper Input Schema",
+    "type": "object",
+    "schemaVersion": 1,
+    "properties": {
+        "mode": {
+            "title": "Scrape Mode",
+            "type": "string",
+            "description": "The mode of scraping: keyword, hashtag, profile, or url.",
+            "default": "keyword",
+            "editor": "select",
+            "choices": ["keyword", "hashtag", "profile", "url"]
+        },
+        "queries": {
+            "title": "Queries",
+            "type": "array",
+            "description": "List of keywords, hashtags, usernames, or URLs to scrape.",
+            "editor": "stringList",
+            "default": ["celsius energy"]
+        },
+        "max_videos": {
+            "title": "Max Videos",
+            "type": "integer",
+            "description": "Maximum videos to fetch per query.",
+            "default": 200
+        },
+        "fetch_comments": {
+            "title": "Fetch Comments",
+            "type": "boolean",
+            "description": "Whether to extract comments for each video.",
+            "default": true
+        },
+        "max_comments_per_video": {
+            "title": "Max Comments per Video",
+            "type": "integer",
+            "description": "Limit the number of comments extracted per video.",
+            "default": 50
+        }
+    },
+    "required": ["mode", "queries"]
+}
